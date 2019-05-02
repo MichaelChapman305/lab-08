@@ -10,6 +10,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const superagent = require('superagent');
+const pg = require('pg');
 
 //--------------------------------
 //Application setup
@@ -17,6 +18,15 @@ const superagent = require('superagent');
 const PORT = process.env.PORT;
 const app = express();
 app.use(cors());
+
+/********************************************************************************
+Database Config
+********************************************************************************/
+const client = new pg.Client(process.env.DATABASE_URL);
+
+client.connect();
+
+client.on('err', err => console.error(err));
 
 //--------------------------------
 // Constructors Functions
