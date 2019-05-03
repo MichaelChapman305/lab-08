@@ -29,6 +29,24 @@ client.connect();
 client.on('err', err => console.error(err));
 
 //--------------------------------
+// Lookup Functions
+//--------------------------------
+
+let lookup = (handler) => {
+  let SQL = `SELECT * FROM ${handler.tableName} WHERE location_id=$1;`;
+
+  return client.query(SQL, [handler.location_id])
+    .then(results => {
+      if (results.rowCount > 0) {
+        handler.cacheHit(results);
+      } else {
+        handler.cacheMiss();
+      }
+    })
+    .catch(() => errorMessage());
+};
+
+//--------------------------------
 // Constructors Functions
 //--------------------------------
 function Location(query, geoData) {
@@ -43,6 +61,9 @@ function Weather(day) {
   this.time = new Date(day.time * 1000).toDateString();
 }
 
+Weather.tableName = 'weathers';
+Weather.lookup = lookup;
+
 function Events(data) {
   let time = Date.parse(data.start.local);
   let newDate = new Date(time).toDateString();
@@ -52,11 +73,14 @@ function Events(data) {
   this.summary = data.summary;
 }
 
+Events.tableName = 'events';
+Events.lookup = lookup;
+
 //--------------------------------
-// Database Query
+// Database and API Query for Locations
 //--------------------------------
 Location.lookup = handler => {
-  const SQL = `SELECT * FROM locations WHERE search_query=$1`;
+  const SQL = `SELECT * FROM locations WHERE search_query=$1;`;
   const values = [handler.query];
 
   return client.query(SQL, values)
@@ -97,30 +121,17 @@ Location.prototype.save = function() {
   return client.query(SQL, values);
 };
 
-let weatherFromDB = (location_id) => {
-  // const SQL = `SELECT * FROM weathers WHERE location_id=$1`;
-  // const values = [location_id];
-  // client.query(SQL, values);
-
-  //check if specific weather in DB
-  //If yes, send that record back to client
-  //If no, call weatherFromAPI
-
-};
-
-let weatherFromAPI = (query) => {
+//--------------------------------
+// Database and API Query for Weather
+//--------------------------------
+Weather.fetch = (query) => {
   const url = `https://api.darksky.net/forecast/${process.env.WEATHER_API_KEY}/${query.latitude},${query.longitude}`;
 
   return superagent.get(url)
     .then(result => {
       return result.body.daily.data.map(day => {
         let weather = new Weather(day);
-        return weather.save();
-      }).then(result => {
-        console.log('weather API result');
-        console.log(result);
-        // weather.id = result.rows[0].id;
-        // return weather;
+        return weather.save(query.id);
       })
         .catch(() => errorMessage());
     })
@@ -128,12 +139,9 @@ let weatherFromAPI = (query) => {
 };
 
 Weather.prototype.save = function(location_id) {
-  console.log('SAVE');
-
   let SQL = `INSERT INTO weathers 
     (forecast, time, location_id)
-    VALUES ($1, $2, $3)
-    RETURNING id;`;
+    VALUES ($1, $2, $3);`;
 
   let values = Object.values(this);
   values.push(location_id);
@@ -141,17 +149,33 @@ Weather.prototype.save = function(location_id) {
   return client.query(SQL, values);
 };
 
-let lookupAll = (handler) => {
-  let SQL = `SELECT * FROM ${handler.tableName}`;
+//--------------------------------
+// Database and API Query for Event
+//--------------------------------
+Events.fetch = (query) => {
+  console.log('query');
+  let url = `https://www.eventbriteapi.com/v3/events/search?token=${process.env.EVENTBRITE_API_KEY}&location.address=${query.formatted_query}`;
 
-  client.query(SQL)
-    .then(results => {
-      if (results.rowCount > 0) {
-        handler.catchHit(results);
-      } else {
-        handler.catchMiss(results);
-      }
-    });
+  return superagent.get(url)
+    .then(result => {
+      const eventData = result.body.events.map(item => {
+        let event = new Events(item);
+        return event.save(query.id);
+      });
+
+    })
+    .catch(() => errorMessage());
+};
+
+Events.prototype.save = function(location_id) {
+  let SQL = `INSERT INTO events 
+    (link, name, event_date, summary, location_id)
+    VALUES ($1, $2, $3, $4, $5);`;
+
+  let values = Object.values(this);
+  values.push(location_id);
+
+  return client.query(SQL, values);
 };
 
 //--------------------------------
@@ -173,44 +197,34 @@ let getLocation = (request, response) => {
 };
 
 let getWeather = (request, response) => {
-  // build weather handler
   const weatherHandler = {
     location_id: request.query.data.id,
-    tableName: 'weathers',
-    cacheHit: () => console.log('Weather cacheHit'),
-    cacheMiss: () => weatherFromAPI(request.query.data.id)
+    tableName: Weather.tableName,
+    cacheHit: (result) => {
+      response.send(result.rows);
+    },
+    cacheMiss: () => {
+      Weather.fetch(request.query.data);
+    }
   };
 
-  lookupAll(weatherHandler);
+  Weather.lookup(weatherHandler);
 };
 
-// let searchWeather = (request, response) => {
-//   const data = request.query.data;
-//   const url = `https://api.darksky.net/forecast/${process.env.WEATHER_API_KEY}/${data.latitude},${data.longitude}`;
+let getEvents = (request, response) => {
+  const eventHandler = {
+    location_id: request.query.data.id,
+    tableName: Events.tableName,
+    cacheHit: (result) => {
+      response.send(result.rows);
+    },
+    cacheMiss: () => {
+      console.log('Cache miss');
+      Events.fetch(request.query.data);
+    }
+  };
 
-//   return superagent.get(url)
-//     .then(result => {
-//       const dailyWeather = result.body.daily.data.map(day => {
-//         return new Weather(day);
-//       });
-
-//       response.send(dailyWeather);
-//     })
-//     .catch(() => errorMessage());
-// };
-
-let searchEvents = (request, response) => {
-  let url = `https://www.eventbriteapi.com/v3/events/search?token=${process.env.EVENTBRITE_API_KEY}&location.address=${request.query.data.formatted_query}`;
-
-  return superagent.get(url)
-    .then(result => {
-      const eventData = result.body.events.map(event => {
-        return new Events(event);
-      });
-
-      response.send(eventData);
-    })
-    .catch(() => errorMessage());
+  Events.lookup(eventHandler);
 };
 
 //--------------------------------
@@ -218,7 +232,7 @@ let searchEvents = (request, response) => {
 //--------------------------------
 app.get('/location', getLocation);
 app.get('/weather', getWeather);
-app.get('/events', searchEvents);
+app.get('/events', getEvents);
 
 //--------------------------------
 // Error Message
