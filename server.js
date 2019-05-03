@@ -129,11 +129,12 @@ Weather.fetch = (query) => {
 
   return superagent.get(url)
     .then(result => {
-      return result.body.daily.data.map(day => {
+      let weatherData = result.body.daily.data.map(day => {
         let weather = new Weather(day);
-        return weather.save(query.id);
-      })
-        .catch(() => errorMessage());
+        weather.save(query.id);
+        return weather;
+      });
+      return weatherData;
     })
     .catch(() => errorMessage());
 };
@@ -153,16 +154,17 @@ Weather.prototype.save = function(location_id) {
 // Database and API Query for Event
 //--------------------------------
 Events.fetch = (query) => {
-  console.log('query');
   let url = `https://www.eventbriteapi.com/v3/events/search?token=${process.env.EVENTBRITE_API_KEY}&location.address=${query.formatted_query}`;
 
   return superagent.get(url)
     .then(result => {
       const eventData = result.body.events.map(item => {
         let event = new Events(item);
-        return event.save(query.id);
+        event.save(query.id);
+        return event;
       });
 
+      return eventData;
     })
     .catch(() => errorMessage());
 };
@@ -204,7 +206,9 @@ let getWeather = (request, response) => {
       response.send(result.rows);
     },
     cacheMiss: () => {
-      Weather.fetch(request.query.data);
+      Weather.fetch(request.query.data)
+        .then((results) => response.send(results))
+        .catch(() => errorMessage());
     }
   };
 
@@ -219,8 +223,9 @@ let getEvents = (request, response) => {
       response.send(result.rows);
     },
     cacheMiss: () => {
-      console.log('Cache miss');
-      Events.fetch(request.query.data);
+      Events.fetch(request.query.data)
+        .then((results) => response.send(results))
+        .catch(() => errorMessage());
     }
   };
 
